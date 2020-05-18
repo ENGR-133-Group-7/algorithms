@@ -46,8 +46,8 @@ def init_leds():
     return yellow, blue, green, red
 
 #calibrates all sensors
-#def calibrate_sensors():
-    #TODO: implement
+def calibrate_sensors():
+    print('\n\nsensors calibrated\n\n')
 
 #get analogue voltage
 def analog_voltage (adc):
@@ -69,21 +69,28 @@ def log_values(t,dht,photocell,soil):
 
 # checks latest reading for values out of tolerance regions
 def check_log(log,POS):
-    bounds = [(300,350),(300,350),(25,28.5)] # tolerance region for humidity, moisture, and air temp
+    bounds = [(0,60),(300,400),(20,28.5)] # tolerance region for humidity, moisture, and air temp
     flags = [False for _ in range(3)]
     for pos in range(len(flags)):
         if log[pos+2]<bounds[pos][0] or log[pos+2]>bounds[pos][1]:
             flags[pos] = True
-            print('out of tolerance region at pos =', (str(pos)+'!') )
+            #print('out of tolerance region at pos =', (str(pos)+'!') )
     return tuple(flags)
 
+def print_log(log, POS):
+    print_str = ''
+    for data,label in zip(log,POS):
+        print_str += label + ': ' + str(data) + '; '
+    return print_str
+
+
 def cross_check(flags_log):
-    print('flags:',flags_log[-1],flags_log[-2])
+    #print('flags:',flags_log[-1],flags_log[-2])
     try:
         match = [(c and l) for c,l in zip(flags_log[-1],flags_log[-2])]
     except Exception as e:
         print('could not get two previous flag logs')
-    print('match data:',match)
+    #print('match data:',match)
 
     if match[0]:
         print('\nhumidity is off\n')
@@ -118,37 +125,51 @@ mount_SD()
 dht = get_DHT(board.D5)
 soil = get_soil_sensor(i2c)
 photocell = get_photocell(board.A1)
-POS = {'date': 0, 'times': 1, 'humidity' : 2, 'moisture' : 3, 'air temp' : 4,
-        'soil temp' : 5, 'photo val' : 6, 'volts' : 7} #position of various data in logs
+POS = ('date', 'time', 'humidity', 'moisture', 'air temp',
+        'soil temp', 'photo val', 'volts') #position of various data in logs
 logs = []
 flags_log = [] #record of past flag logs
 max_len = 50 #maximum length for logs until older entries are overwritten
-count = 0
-
 yellow,blue,green,red = init_leds()
+popped = False
+time_not_up = True
+current_time = 0
+run_time = 30 #runtime in seconds
 
-with open("/sd/results.txt", "a") as f:
-    while count < 50:
-        count += 1
+
+with open("/sd/results.txt", "w") as f:
+    while time_not_up:
+        current_time += 1
         t = rtc.datetime
 
-        current_log = log_values(t,dht,photocell,soil)
-        if len(logs) < max_len:
-            logs.append(current_log)
+        if current_time % 5 == 0:                               #setting the interval for sensor calibration
+            calibrate_sensors()
+
+        if current_time % 2 == 0:                               #setting the interval for logging data
+            current_log = log_values(t,dht,photocell,soil)
+            if len(logs) < max_len:
+                logs.append(current_log)
+            else:
+                logs.pop(0)
+                logs.append(current_log)
+
+            current_flags = check_log(current_log,POS)
+
+            if len(flags_log) >= max_len:
+                if not popped:
+                    f.write('\n\npopping oldest reading\n\n')
+                flags_log.pop(0)
+                popped = True
+
+            flags_log.append(current_flags)
+            if len(flags_log)>1:
+                cross_check(flags_log)
+
+            print_log(current_log,POS)
+            f.write('run time is ' + str(current_time) + ' seconds:\n     ' + print_log(current_log,POS) + '\n')
+
+        if current_time == run_time:
+            time_not_up = False
+            print('\n\nruntime is complete\n\n')
         else:
-            logs.pop(0)
-            logs.append(current_log)
-
-        current_flags = check_log(current_log,POS)
-        if len(flags_log) >= max_len:
-            flags_log.pop(0)
-        flags_log.append(current_flags)
-        if len(flags_log)>1:
-            cross_check(flags_log)
-
-        print(current_log)
-        print(len(logs))
-        time.sleep(0.15)
-        f.write(str(current_log) + '\n')
-
-[print(str(log[3])+'\n') for log in logs]
+            time.sleep(1)
